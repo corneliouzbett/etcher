@@ -19,15 +19,70 @@
 const _ = require('lodash')
 const path = require('path')
 const SimpleProgressWebpackPlugin = require('simple-progress-webpack-plugin')
+const MiniCssExtractPlugin = require('mini-css-extract-plugin')
 const nodeExternals = require('webpack-node-externals')
 
 const commonConfig = {
   mode: 'production',
+  resolve: {
+    extensions: [ '.js', '.jsx', '.json' ]
+  },
+  plugins: [
+    new SimpleProgressWebpackPlugin({
+      format: process.env.WEBPACK_PROGRESS || 'verbose'
+    })
+  ],
+  output: {
+    path: path.join(__dirname, 'generated'),
+    filename: '[name].js'
+  }
+}
+
+const guiConfig = _.assign(_.cloneDeep(commonConfig), {
+  node: {
+    __dirname: true,
+    __filename: true
+  },
+  target: 'electron-renderer',
   optimization: {
     // Minification breaks angular.
     minimize: false
   },
-  target: 'electron-main',
+  externals: [
+    nodeExternals(),
+    (context, request, callback) => {
+      // eslint-disable-next-line lodash/prefer-lodash-method
+      const absoluteContext = path.resolve(context)
+      const absoluteNodeModules = path.resolve('node_modules')
+
+      // if (/\/fonts/i.test(request)) {
+      //   const output = path.join(__dirname, 'generated')
+      //   const fontName = _.last(_.split(request, '/'))
+      //   const fontPath = path.join(output, 'fonts', fontName)
+      //   return callback(null, `commonjs ${fontPath}`)
+      // }
+
+      // We shouldn't rewrite any node_modules import paths
+      // eslint-disable-next-line lodash/prefer-lodash-method
+      if (!path.relative(absoluteNodeModules, absoluteContext).startsWith('..')) {
+        return callback()
+      }
+
+      // We want to keep the SDK code outside the GUI bundle.
+      // This piece of code allows us to run the GUI directly
+      // on the tree (for testing purposes) or inside a generated
+      // bundle (for production purposes), by translating
+      // relative require paths within the bundle.
+      if (/\/(sdk|shared)/i.test(request) || /package\.json$/.test(request)) {
+        const output = path.join(__dirname, 'generated')
+        const dirname = path.join(context, request)
+        const relative = path.relative(output, dirname)
+        return callback(null, `commonjs ${path.join('..', '..', relative)}`)
+      }
+
+      return callback()
+    }
+  ],
   module: {
     rules: [
       {
@@ -51,66 +106,48 @@ const commonConfig = {
         use: {
           loader: 'html-loader'
         }
+      },
+      {
+        test: /\.s(a|c)ss$/,
+        use: [
+          // eslint-disable-next-line no-negated-condition
+          process.env.NODE_ENV !== 'production' ? 'style-loader' : MiniCssExtractPlugin.loader,
+          // 'style-loader',
+          'css-loader',
+          'resolve-url-loader',
+          'sass-loader'
+        ]
+      },
+      {
+        test: /\.(eot|woff|woff2|svg|ttf)([?]?.*)$/,
+        use: [
+          {
+            loader: 'file-loader',
+            options: {
+              name: 'fonts/[name].[ext]'
+            }
+          }
+        ]
       }
     ]
   },
-  resolve: {
-    extensions: [ '.js', '.jsx', '.json' ]
-  },
-  plugins: [
-    new SimpleProgressWebpackPlugin({
-      format: process.env.WEBPACK_PROGRESS || 'verbose'
-    })
-  ]
-}
-
-const guiConfig = _.assign({
-  node: {
-    __dirname: true,
-    __filename: true
-  },
-  externals: [
-    nodeExternals(),
-    (context, request, callback) => {
-      // eslint-disable-next-line lodash/prefer-lodash-method
-      const absoluteContext = path.resolve(context)
-      const absoluteNodeModules = path.resolve('node_modules')
-
-      // We shouldn't rewrite any node_modules import paths
-      // eslint-disable-next-line lodash/prefer-lodash-method
-      if (!path.relative(absoluteNodeModules, absoluteContext).startsWith('..')) {
-        return callback()
-      }
-
-      // We want to keep the SDK code outside the GUI bundle.
-      // This piece of code allows us to run the GUI directly
-      // on the tree (for testing purposes) or inside a generated
-      // bundle (for production purposes), by translating
-      // relative require paths within the bundle.
-      if (/\/(sdk|shared)/i.test(request) || /package\.json$/.test(request)) {
-        const output = path.join(__dirname, 'generated')
-        const dirname = path.join(context, request)
-        const relative = path.relative(output, dirname)
-        return callback(null, `commonjs ${path.join('..', '..', relative)}`)
-      }
-
-      return callback()
-    }
-  ],
   entry: {
     gui: path.join(__dirname, 'lib', 'gui', 'app', 'app.js')
   },
-  output: {
-    path: path.join(__dirname, 'generated'),
-    filename: '[name].js'
-  }
-}, commonConfig)
+  plugins: [
+    new MiniCssExtractPlugin({
+      filename: '[name].css',
+      chunkFilename: '[id].css'
+    })
+  ]
+})
 
-const etcherConfig = _.assign({
+const etcherConfig = _.assign(_.cloneDeep(commonConfig), {
   node: {
     __dirname: false,
     __filename: true
   },
+  target: 'electron-main',
   externals: [
     nodeExternals(),
     (context, request, callback) => {
@@ -141,12 +178,8 @@ const etcherConfig = _.assign({
   ],
   entry: {
     etcher: path.join(__dirname, 'lib', 'gui', 'etcher.js')
-  },
-  output: {
-    path: path.join(__dirname, 'generated'),
-    filename: '[name].js'
   }
-}, commonConfig)
+})
 
 module.exports = [
   guiConfig,
